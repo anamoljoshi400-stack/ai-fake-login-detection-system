@@ -16,16 +16,24 @@ import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
-
+from sklearn.ensemble import RandomForestClassifier
 
 
 # -------------------------------------------------
 # EMAIL OTP SETTINGS
 # -------------------------------------------------
-EMAIL_SENDER = st.secrets["EMAIL_SENDER"]
-EMAIL_PASSWORD = st.secrets["EMAIL_PASSWORD"]
+def get_secret_value(key: str, default: str = ""):
+    try:
+        return st.secrets[key]
+    except Exception:
+        return default
+
+
+EMAIL_SENDER = get_secret_value("EMAIL_SENDER", "")
+EMAIL_PASSWORD = get_secret_value("EMAIL_PASSWORD", "")
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
+
 
 # -------------------------------------------------
 # PATHS
@@ -38,12 +46,10 @@ MODELS_DIR = ROOT_DIR / "models"
 
 PROFILE_DB = DATA_DIR / "user_profiles.csv"
 LOG_FILE = DATA_DIR / "login_logs.csv"
+TRAINING_DATASET = DATA_DIR / "behavior_training_data.csv"
 
 MODEL_FILE = MODELS_DIR / "behavior_model.pkl"
 META_FILE = MODELS_DIR / "model_meta.json"
-
-LSTM_MODEL_FILE = MODELS_DIR / "lstm_behavior_model.keras"
-LSTM_SCALER_FILE = MODELS_DIR / "lstm_scaler.pkl"
 LSTM_META_FILE = MODELS_DIR / "lstm_model_meta.json"
 
 DEFAULT_LOCATIONS = ["Australia", "Nepal", "USA", "India", "Russia", "Other"]
@@ -104,6 +110,10 @@ def validate_strong_password(password: str):
 # EMAIL OTP
 # -------------------------------------------------
 def send_email_otp(receiver_email, otp):
+    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+        st.error("Email secrets are missing. Add EMAIL_SENDER and EMAIL_PASSWORD in Streamlit secrets.")
+        return False
+
     msg = EmailMessage()
     msg["Subject"] = "Your Login OTP Code"
     msg["From"] = EMAIL_SENDER
@@ -169,17 +179,6 @@ def bucket_to_code(bucket: str) -> int:
 # MODEL LOADING
 # -------------------------------------------------
 @st.cache_resource
-def load_rf_model():
-    try:
-        if MODEL_FILE.exists():
-            return joblib.load(MODEL_FILE)
-        return None
-    except Exception as e:
-        st.warning(f"Random Forest model could not be loaded: {e}")
-        return None
-
-
-@st.cache_resource
 def load_meta():
     try:
         if META_FILE.exists():
@@ -193,25 +192,50 @@ def load_meta():
     }
 
 
-@st.cache_resource
-def load_lstm_model():
-    try:
-        if LSTM_MODEL_FILE.exists():
-            return load_keras_model(LSTM_MODEL_FILE)
-        return None
-    except Exception as e:
-        st.warning(f"LSTM model could not be loaded: {e}")
-        return None
+meta = load_meta()
+MODEL_FEATURES = meta.get("features", DEFAULT_FEATURES)
+BEST_THR = float(meta.get("threshold", meta.get("threshold_f1_optimal", 0.5)))
 
 
 @st.cache_resource
-def load_lstm_scaler():
-    try:
-        if LSTM_SCALER_FILE.exists():
-            return joblib.load(LSTM_SCALER_FILE)
+def train_rf_from_csv():
+    if not TRAINING_DATASET.exists():
         return None
+
+    df = pd.read_csv(TRAINING_DATASET)
+
+    required_cols = DEFAULT_FEATURES + ["label"]
+    for col in required_cols:
+        if col not in df.columns:
+            return None
+
+    df = df.dropna(subset=required_cols)
+
+    X = df[DEFAULT_FEATURES]
+    y = df["label"].astype(int)
+
+    model = RandomForestClassifier(
+        n_estimators=300,
+        random_state=42,
+        class_weight="balanced",
+    )
+
+    model.fit(X, y)
+    return model
+
+
+@st.cache_resource
+def load_rf_model():
+    try:
+        if MODEL_FILE.exists():
+            return joblib.load(MODEL_FILE)
     except Exception as e:
-        st.warning(f"LSTM scaler could not be loaded: {e}")
+        st.warning("Saved Random Forest model could not be loaded. A cloud-compatible model will be trained from CSV.")
+
+    try:
+        return train_rf_from_csv()
+    except Exception as e:
+        st.warning(f"Random Forest fallback training failed: {e}")
         return None
 
 
@@ -222,21 +246,13 @@ def load_lstm_meta():
             return json.loads(LSTM_META_FILE.read_text())
     except Exception:
         pass
-
     return {}
 
 
-# Random Forest
 model = load_rf_model()
-meta = load_meta()
-
-# LSTM
-lstm_model = load_lstm_model()
-lstm_scaler = load_lstm_scaler()
 lstm_meta = load_lstm_meta()
 
-MODEL_FEATURES = meta.get("features", DEFAULT_FEATURES)
-BEST_THR = float(meta.get("threshold", meta.get("threshold_f1_optimal", 0.5)))
+LSTM_AVAILABLE_IN_CLOUD = False
 
 
 # -------------------------------------------------
@@ -362,7 +378,7 @@ def count_failed_attempts(username: str) -> int:
 
     user_logs = logs[logs["username"] == username.lower()].tail(5)
 
-    return int((user_logs["result"] == "Failed").sum())
+    return int((user_logs["result"] == "Failed").sum() + (user_logs["result"] == "High Risk").sum())
 
 
 # -------------------------------------------------
@@ -391,54 +407,6 @@ def build_feature_row(
         row.setdefault(feature, 0)
 
     return pd.DataFrame([row])[MODEL_FEATURES]
-
-
-def build_lstm_sequence(current_row, username):
-    if lstm_model is None or lstm_scaler is None or not lstm_meta:
-        return None
-
-    sequence_length = int(lstm_meta.get("sequence_length", 5))
-    lstm_features = lstm_meta.get("features", DEFAULT_FEATURES)
-
-    logs = load_logs()
-    rows = []
-
-    if not logs.empty and "username" in logs.columns:
-        logs["username"] = logs["username"].fillna("").astype(str).str.lower()
-        user_logs = logs[logs["username"] == username.lower()].copy()
-
-        if "ts" in user_logs.columns:
-            user_logs["ts"] = pd.to_datetime(user_logs["ts"], errors="coerce")
-            user_logs = user_logs.sort_values("ts")
-
-        user_logs = user_logs.tail(sequence_length - 1)
-
-        for _, row in user_logs.iterrows():
-            login_country = normalize_country(row.get("login_country", "Unknown"))
-            login_bucket = map_country_to_bucket(login_country)
-            loc_code = bucket_to_code(login_bucket)
-
-            rows.append(
-                {
-                    "avg_typing_speed": float(row.get("typing_speed", 0) or 0),
-                    "location_encoded": int(loc_code),
-                    "login_hour": int(row.get("login_hour", 0) or 0),
-                    "failed_attempts": int(row.get("failed_attempts", 0) or 0),
-                    "location_mismatch": int(row.get("location_mismatch", 0) or 0),
-                    "password_length": int(row.get("password_length", 0) or 0),
-                    "day_of_week": int(row.get("day_of_week", 0) or 0),
-                }
-            )
-
-    rows.append(current_row)
-
-    if len(rows) < sequence_length:
-        return None
-
-    sequence_df = pd.DataFrame(rows)[lstm_features]
-    scaled = lstm_scaler.transform(sequence_df)
-
-    return np.array([scaled])
 
 
 # -------------------------------------------------
@@ -577,10 +545,6 @@ with tab1:
             st.error("Username already exists.")
             st.stop()
 
-        if email_clean in df["email"].astype(str).str.lower().values:
-            st.error("Email already exists.")
-            st.stop()
-
         valid, msg = validate_strong_password(password)
         if not valid:
             st.error(msg)
@@ -656,7 +620,7 @@ with tab2:
 
         typing_speed = max(0.3, min(float(typing_speed), 15.0))
         st.session_state.saved_typing_speed = typing_speed
- 
+
         failed_attempts_now = count_failed_attempts(username_clean) + 1
 
         if not verify_password(password, user["password_salt"], user["password_hash"]):
@@ -805,36 +769,10 @@ with tab2:
                 except Exception:
                     rf_prob = 0
 
-                current_lstm_row = {
-                    "avg_typing_speed": float(typing_speed),
-                    "location_encoded": int(loc_code),
-                    "login_hour": int(login_hour),
-                    "failed_attempts": int(failed_attempts),
-                    "location_mismatch": int(location_mismatch),
-                    "password_length": int(password_length),
-                    "day_of_week": int(day_of_week),
-                }
-
                 lstm_prob = 0
                 lstm_used = False
 
-                try:
-                    lstm_sequence = build_lstm_sequence(
-                        current_row=current_lstm_row,
-                        username=st.session_state.login_user,
-                    )
-
-                    if lstm_model is not None and lstm_sequence is not None:
-                        lstm_prob = float(lstm_model.predict(lstm_sequence, verbose=0)[0][0])
-                        lstm_used = True
-                except Exception:
-                    lstm_prob = 0
-                    lstm_used = False
-
-                if lstm_used:
-                    prob = round((rf_prob + lstm_prob) / 2, 4)
-                else:
-                    prob = round(rf_prob, 4)
+                prob = round(rf_prob, 4)
 
                 risk_score, reasons = calculate_risk(
                     prob=prob,
