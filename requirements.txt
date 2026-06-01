@@ -4,5 +4,4 @@ numpy
 scikit-learn
 joblib
 requests
-tensorflow==2.9.1
 protobuf==3.20.3
