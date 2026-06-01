@@ -1,7 +1,7 @@
-streamlit==1.36.0
+streamlit
 pandas
 numpy
 scikit-learn
 joblib
 requests
-protobuf==3.20.3
+protobuf
