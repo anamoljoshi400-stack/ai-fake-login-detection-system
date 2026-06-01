@@ -1,0 +1,45 @@
+{
+    "model_type": "RandomForestClassifier",
+    "features": [
+        "avg_typing_speed",
+        "location_encoded",
+        "login_hour",
+        "failed_attempts",
+        "location_mismatch",
+        "password_length",
+        "day_of_week"
+    ],
+    "target": "label",
+    "threshold": 0.9,
+    "accuracy": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "roc_auc": 1.0,
+    "n_train": 160,
+    "n_test": 40,
+    "dataset_rows": 200,
+    "label_distribution": {
+        "0": 100,
+        "1": 100
+    },
+    "confusion_matrix": [
+        [
+            20,
+            0
+        ],
+        [
+            0,
+            20
+        ]
+    ],
+    "feature_importance": {
+        "location_mismatch": 0.282465520679735,
+        "login_hour": 0.281504811689909,
+        "failed_attempts": 0.2317300314472889,
+        "location_encoded": 0.11456383970873564,
+        "avg_typing_speed": 0.07499963542594248,
+        "password_length": 0.014736161048388947,
+        "day_of_week": 0.0
+    }
+}

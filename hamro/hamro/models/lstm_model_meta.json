@@ -1,0 +1,40 @@
+{
+    "model_type": "LSTM",
+    "purpose": "Sequential behavioural login analysis",
+    "features": [
+        "avg_typing_speed",
+        "location_encoded",
+        "login_hour",
+        "failed_attempts",
+        "location_mismatch",
+        "password_length",
+        "day_of_week"
+    ],
+    "target": "label",
+    "sequence_length": 5,
+    "threshold": 0.5,
+    "accuracy": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "roc_auc": 1.0,
+    "n_train": 156,
+    "n_test": 40,
+    "dataset_rows": 200,
+    "sequence_rows": 196,
+    "confusion_matrix": [
+        [
+            20,
+            0
+        ],
+        [
+            0,
+            20
+        ]
+    ],
+    "label_distribution": {
+        "0": 100,
+        "1": 100
+    },
+    "note": "This LSTM model is used as a secondary sequential model. It requires enough login history to create a sequence. Random Forest remains the primary deployed model for single-login prediction."
+}
