@@ -230,7 +230,7 @@ def load_rf_model():
         if MODEL_FILE.exists():
             return joblib.load(MODEL_FILE)
     except Exception as e:
-        #st.warning("Saved Random Forest model could not be loaded. A cloud-compatible model will be trained from CSV.")
+        pass
 
     try:
         return train_rf_from_csv()
